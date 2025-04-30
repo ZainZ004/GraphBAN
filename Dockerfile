@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Copy requirements.txt to take advantage of Docker cache
 COPY requirements.txt .
 RUN conda create -n graphban python=3.11 \
-    && pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118 \
+    && conda run -n graphban pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118  -f https://data.dgl.ai/wheels/torch-2.4/cu118/repo.html\
     && conda clean --all -f -y \
     && conda run -n graphban pip install jupyterlab \
     && conda run -n graphban pip cache purge \
