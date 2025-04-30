@@ -24,4 +24,4 @@ COPY . /app/
 EXPOSE 8889
 
 # Set entrypoint to run JupyterLab
-ENTRYPOINT ["/opt/conda/envs/protgps/bin/jupyter", "lab", "--ip='0.0.0.0'", "--port=8889", "--no-browser", "--allow-root", "--NotebookApp.token=''", "--NotebookApp.password=''"]
+ENTRYPOINT ["/opt/conda/envs/graphban/bin/jupyter", "lab", "--ip='0.0.0.0'", "--port=8889", "--no-browser", "--allow-root", "--NotebookApp.token=''", "--NotebookApp.password=''"]
