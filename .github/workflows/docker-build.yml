@@ -68,12 +68,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Docker Image Slim
-        uses: kitabisa/docker-slim-action@v1
-        env:
-          DSLIM_HTTP_PROBE: true
-        with:
-          target: ${{ github.repository }}:latest
-          tag: "slim"
           
