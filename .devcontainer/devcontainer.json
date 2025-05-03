@@ -1,0 +1,4 @@
+{
+  "image": "ghcr.io/rocker-org/devcontainer-features/miniforge:2",
+  "features": {}
+}
