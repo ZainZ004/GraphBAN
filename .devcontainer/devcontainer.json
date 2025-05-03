@@ -1,4 +1,10 @@
 {
-  "image": "ghcr.io/rocker-org/devcontainer-features/miniforge:2",
-  "features": {}
+  "image": "mcr.microsoft.com/devcontainers/base:debian",
+  "features": {
+    "ghcr.io/rocker-org/devcontainer-features/miniforge:2": {},
+    "ghcr.io/nils-geistmann/devcontainers-features/zsh:0": {
+      "theme": "half-life",
+      "plugins": "git conda"
+    }
+}
 }
