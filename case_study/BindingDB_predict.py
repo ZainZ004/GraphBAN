@@ -15,7 +15,6 @@ for i in tqdm(range(1, 26), desc="Running model for zinc files"):
 
     # Execute the command
     os.system(command)
-import os
 
 import pandas as pd
 

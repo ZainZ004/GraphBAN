@@ -11,6 +11,9 @@ RUN conda create -n graphban python=3.11 \
     --extra-index-url https://download.pytorch.org/whl/cu118  \
     -f https://data.dgl.ai/wheels/torch-2.3/cu118/repo.html \
     -f https://data.pyg.org/whl/torch-2.3.0+cu118.html \
+    && apt-get update \
+    && apt-get install librdkit1 rdkit-data -y \
+    && apt-get clean \
     && conda clean --all -f -y \
     && conda run -n graphban pip install jupyterlab \
     && conda run -n graphban pip cache purge \
