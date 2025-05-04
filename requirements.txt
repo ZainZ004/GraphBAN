@@ -80,3 +80,4 @@ urllib3==2.2.3
 wcwidth==0.2.13
 yacs==0.1.8
 yarl==1.18.3
+bio>=1.7.1
