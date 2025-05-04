@@ -221,19 +221,20 @@ def process_model_weights(model_path, base_model_state, config, device, test_loa
         model_instance.load_state_dict(torch.load(model_path, map_location=device))
         model_instance.eval() # 确保模型处于评估模式
 
+        # !Error , Wait to fix
         # Compile Model to boost inference speed
-        if hasattr(torch, "compile"):
-            try:
-                # 'reduce-overhead' 模式通常适合推理，编译时间适中
-                # 'max-autotune' 编译时间更长，但可能获得最佳运行时性能
-                compile_mode = "reduce-overhead"
-                logger.info(f"Attempting to compile model for epoch {epoch_num} with mode='{compile_mode}'...")
-                model_instance = torch.compile(model_instance, mode=compile_mode)
-                logger.info(f"Successfully compiled model for epoch {epoch_num}")
-            except Exception as compile_err:
-                logger.warning(f"torch.compile failed for epoch {epoch_num}: {compile_err}. Using uncompiled model.")
-        else:
-            logger.warning("torch.compile not available (requires PyTorch 2.0+). Using uncompiled model.")
+        # if hasattr(torch, "compile"):
+        #     try:
+        #         # 'reduce-overhead' 模式通常适合推理，编译时间适中
+        #         # 'max-autotune' 编译时间更长，但可能获得最佳运行时性能
+        #         compile_mode = "reduce-overhead"
+        #         logger.info(f"Attempting to compile model for epoch {epoch_num} with mode='{compile_mode}'...")
+        #         model_instance = torch.compile(model_instance, mode=compile_mode)
+        #         logger.info(f"Successfully compiled model for epoch {epoch_num}")
+        #     except Exception as compile_err:
+        #         logger.warning(f"torch.compile failed for epoch {epoch_num}: {compile_err}. Using uncompiled model.")
+        # else:
+        #     logger.warning("torch.compile not available (requires PyTorch 2.0+). Using uncompiled model.")
 
         # 直接推理逻辑
         predictions = []
@@ -388,7 +389,7 @@ def main():
              return
 
         # 使用 ThreadPoolExecutor 并行处理模型
-        num_parallel_models = min(len(pth_files), 2)
+        num_parallel_models = min(len(pth_files), 1)
         logger.info(f"Starting parallel inference with max_workers={num_parallel_models}")
         
         all_predictions = {}
