@@ -3,13 +3,30 @@ import torch.nn as nn
 import os
 import numpy as np
 from sklearn.metrics import roc_auc_score, average_precision_score
-from models import binary_cross_entropy, cross_entropy_logits, entropy_logits, RandomLayer
+from models import (
+    binary_cross_entropy,
+    cross_entropy_logits,
+    entropy_logits,
+    RandomLayer,
+)
 from domain_adaptator import ReverseLayerF
 from tqdm import tqdm
 import torch.nn.functional as F
 
+
 class Trainer:
-    def __init__(self, model, optim, device, test_dataloader, opt_da=None, discriminator=None, experiment=None, alpha=1, **config):
+    def __init__(
+        self,
+        model,
+        optim,
+        device,
+        test_dataloader,
+        opt_da=None,
+        discriminator=None,
+        experiment=None,
+        alpha=1,
+        **config,
+    ):
         self.model = model
         self.optim = optim
         self.device = device
@@ -48,14 +65,17 @@ class Trainer:
 
         if config["DA"]["RANDOM_LAYER"]:
             if config["DA"]["ORIGINAL_RANDOM"]:
-                self.random_layer = RandomLayer([config["DECODER"]["IN_DIM"], self.n_class], config["DA"]["RANDOM_DIM"])
+                self.random_layer = RandomLayer(
+                    [config["DECODER"]["IN_DIM"], self.n_class],
+                    config["DA"]["RANDOM_DIM"],
+                )
                 if torch.cuda.is_available():
                     self.random_layer.cuda()
             else:
                 self.random_layer = nn.Linear(
                     in_features=config["DECODER"]["IN_DIM"] * self.n_class,
                     out_features=config["DA"]["RANDOM_DIM"],
-                    bias=False
+                    bias=False,
                 ).to(self.device)
                 torch.nn.init.normal_(self.random_layer.weight, mean=0, std=1)
                 for param in self.random_layer.parameters():
@@ -66,7 +86,9 @@ class Trainer:
     def da_lambda_decay(self):
         delta_epoch = self.current_epoch - self.da_init_epoch
         non_init_epoch = self.epochs - self.da_init_epoch
-        p = (self.current_epoch + delta_epoch * self.batch_size) / (non_init_epoch * self.batch_size)
+        p = (self.current_epoch + delta_epoch * self.batch_size) / (
+            non_init_epoch * self.batch_size
+        )
         grow_fact = 2.0 / (1.0 + np.exp(-10 * p)) - 1
         return self.init_lamb_da * grow_fact
 
@@ -77,7 +99,7 @@ class Trainer:
     def _compute_entropy_weights(self, logits):
         entropy = entropy_logits(logits)
         entropy = ReverseLayerF.apply(entropy, self.alpha)
-        entropy_w = 1.0 + torch.exp(-entropy) # type: ignore
+        entropy_w = 1.0 + torch.exp(-entropy)  # type: ignore
         return entropy_w
 
     def test(self, dataloader="test"):
@@ -90,8 +112,12 @@ class Trainer:
         with torch.no_grad():
             self.model.eval()
             for v_d, sm, v_p, esm in data_loader:
-                sm = torch.tensor(sm, dtype=torch.float32).reshape(sm.shape[0], 1, 384).to(self.device)
-                esm = torch.tensor(esm, dtype=torch.float32).reshape(esm.shape[0], 1, 1280).to(self.device)
+                sm.clone.detach.to(torch.float32).reshape(sm.shape[0], 1, 384).to(
+                    self.device
+                )
+                esm.clone.detach.to(torch.float32).reshape(esm.shape[0], 1, 1280).to(
+                    self.device
+                )
                 v_d, v_p = v_d.to(self.device), v_p.to(self.device)
 
                 _, _, _, score = self.model(v_d, sm, v_p, esm, self.device)

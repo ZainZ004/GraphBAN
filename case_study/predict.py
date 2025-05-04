@@ -195,11 +195,71 @@ def get_pth_files(folder_path, start_epoch=30, end_epoch=50):
         logger.error(f"Failed to get .pth files: {str(e)}")
         raise
 
+# 用于在单独线程中处理单个模型的函数
+def process_model_weights(model_path, base_model_state, config, device, test_loader):
+    """
+    加载指定路径的模型权重，执行推理，并返回预测结果。
+
+    Args:
+        model_path (str): .pth 文件的路径。
+        base_model_state (dict): 基础模型结构的状态字典 (用于创建新实例)。
+        config (CfgNode): 配置对象。
+        device (torch.device): 计算设备 (CPU 或 CUDA)。
+        test_loader (DataLoader): 测试数据加载器。
+
+    Returns:
+        tuple: (epoch_num, predictions) 或 None (如果出错)。
+    """
+    try:
+        epoch_num = int(model_path.split("_")[-1].replace(".pth", ""))
+        logger.info(f"Thread processing model from epoch {epoch_num} ({os.path.basename(model_path)})")
+
+        # 为每个线程创建一个独立的模型实例，以避免潜在的线程安全问题
+        model_instance = GraphBAN(**config).to(device)
+
+        # 加载特定 epoch 的训练权重
+        model_instance.load_state_dict(torch.load(model_path, map_location=device))
+        model_instance.eval() # 确保模型处于评估模式
+
+        # 直接推理逻辑
+        predictions = []
+        with torch.no_grad():
+            for v_d, sm, v_p, esm_feat in test_loader:
+                sm = sm.clone().detach().to(torch.float32).reshape(sm.shape[0], 1, 384).to(device)
+                esm_feat = esm_feat.clone().detach().to(torch.float32).reshape(esm_feat.shape[0], 1, 1280).to(device)
+                v_d, v_p = v_d.to(device), v_p.to(device)
+
+                _, _, _, score = model_instance(v_d, sm, v_p, esm_feat, device)
+
+                if config["DECODER"]["BINARY"] == 1:
+                    m = nn.Sigmoid()
+                    n = torch.squeeze(m(score), 1)
+                else:
+                    n = score
+
+                predictions.extend(n.cpu().tolist())
+
+        # 清理模型实例以释放内存
+        del model_instance
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+
+        logger.info(f"Thread finished processing epoch {epoch_num}")
+        return epoch_num, predictions
+
+    except Exception as e:
+        logger.error(f"Error processing model {model_path} in thread: {str(e)}")
+        if 'model_instance' in locals() and device.type == 'cuda':
+             # Already Check model_instance is defined dismiss pylance's error
+             del model_instance  # noqa: F821
+             torch.cuda.empty_cache()
+        return None
+
 def main():
     # 解析命令行参数
     args = parse_arguments()
     start_time_total = time.time()
-    
+
     try:
         # 创建结果目录
         if not os.path.exists(args.folder_path):
@@ -257,6 +317,7 @@ def main():
         # 提取蛋白质特征
         logger.info("Extracting protein features")
         pro_list_test = df_test["Protein"].unique()
+        logger.info(f"Unique proteins in test set: {len(pro_list_test)}")
         protein_features = get_protein_feature(list(pro_list_test), batch_converter, esm_model, device)
         df_test = pd.merge(df_test, protein_features, on="Protein", how="left")
         
@@ -279,14 +340,14 @@ def main():
         logger.info(f"Loading configuration from {args.config_file}")
         cfg = get_cfg_defaults()
         cfg.merge_from_file(args.config_file)
-        
+
         # 覆盖批处理大小（如果指定）
         if args.batch_size is not None:
             cfg.SOLVER.BATCH_SIZE = args.batch_size
             logger.info(f"Overriding batch size to {args.batch_size}")
-            
+
         cfg.freeze()
-        
+
         # 设置DataLoader
         test_dataset = DTIDataset(df_test.index.values, df_test)
         test_generator = DataLoader(
@@ -296,69 +357,88 @@ def main():
             num_workers=cfg.SOLVER.NUM_WORKERS,
             drop_last=False,
             collate_fn=graph_collate_func,
+            pin_memory=True if device.type == 'cuda' else False
         )
-        
-        # 加载GraphBAN模型
-        modelG = GraphBAN(**cfg).to(device)
-        opt = torch.optim.Adam(modelG.parameters(), lr=cfg.SOLVER.LR)
-        
+
+        # 获取基础模型结构
+        base_model = GraphBAN(**cfg)
+        base_model_state = base_model.state_dict()
+        del base_model
+
         # 获取.pth文件
         pth_files = get_pth_files(args.folder_path, args.start_epoch, args.end_epoch)
-        logger.info(f"Found {len(pth_files)} model files for prediction")
+        logger.info(f"Found {len(pth_files)} model files for prediction between epochs {args.start_epoch} and {args.end_epoch}")
+
+        if not pth_files:
+             logger.error("No model files found in the specified epoch range. Exiting.")
+             return
+
+        # 使用 ThreadPoolExecutor 并行处理模型
+        num_parallel_models = min(len(pth_files), 4)
+        logger.info(f"Starting parallel inference with max_workers={num_parallel_models}")
         
-        # 对每个模型进行预测
-        i = 1
-        for model_path in tqdm(pth_files, desc="Processing models"):
-            epoch_num = int(model_path.split("_")[-1].replace(".pth", ""))
-            logger.info(f"Processing model from epoch {epoch_num}")
-            
-            try:
-                # 加载训练好的模型
-                modelG.load_state_dict(torch.load(model_path, map_location=device))
-                trainer = Trainer(modelG, opt, device, test_generator, **cfg)
-                pred = trainer.train()
-                
-                # 保存结果
-                df_test[f"pred{epoch_num}"] = pred
-                i += 1
-            except Exception as e:
-                logger.error(f"Error processing model {model_path}: {str(e)}")
-                continue
-        
-        # 清理内存并计算平均值
+        all_predictions = {}
+        with ThreadPoolExecutor(max_workers=num_parallel_models) as executor:
+            futures = {
+                executor.submit(process_model_weights, model_path, base_model_state, cfg, device, test_generator): model_path
+                for model_path in pth_files
+            }
+
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing models"):
+                model_path = futures[future]
+                try:
+                    result = future.result()
+                    if result:
+                        epoch_num, preds = result
+                        all_predictions[epoch_num] = preds
+                except Exception as exc:
+                    logger.error(f'Model {os.path.basename(model_path)} generated an exception: {exc}')
+
+        if not all_predictions:
+             logger.error("No predictions were successfully generated from any model file. Exiting.")
+             if "esm" in df_test.columns: del df_test["esm"]
+             if "fcfp" in df_test.columns: del df_test["fcfp"]
+             df_test.to_csv(os.path.join(args.folder_path, args.save_dir.replace(".csv", "_failed.csv")), index=False)
+             return
+
+        logger.info(f"Adding {len(all_predictions)} sets of predictions to DataFrame")
+        sorted_epochs = sorted(all_predictions.keys())
+        for epoch in sorted_epochs:
+             df_test[f"pred{epoch}"] = all_predictions[epoch]
+
         logger.info("Computing average predictions")
-        del df_test["esm"]
-        del df_test["fcfp"]
-        
-        # 保存SMILES和蛋白质列
+        if "esm" in df_test.columns:
+            del df_test["esm"]
+        if "fcfp" in df_test.columns:
+            del df_test["fcfp"]
+        if device.type == 'cuda':
+             torch.cuda.empty_cache()
+
         smiles = df_test["SMILES"]
         proteins = df_test["Protein"]
-        
-        # 删除非预测列
+
         pred_columns = [col for col in df_test.columns if col.startswith("pred")]
         if not pred_columns:
-            raise ValueError("No predictions were generated")
-            
+            raise ValueError("No prediction columns found in the dataframe")
+
         df_pred_only = df_test[pred_columns]
-        
-        # 计算行平均值
+
         df_test["predicted_value"] = df_pred_only.mean(axis=1)
-        
-        # 创建结果数据框
+
         new_data = pd.DataFrame()
         new_data["SMILES"] = smiles
         new_data["Protein"] = proteins
         new_data["predicted_value"] = df_test["predicted_value"]
-        
-        # 保存结果
+
         output_path = os.path.join(args.folder_path, args.save_dir)
         new_data.to_csv(output_path, index=False)
         logger.info(f"Results saved to {output_path}")
         logger.info(f"Total execution time: {time.time() - start_time_total:.2f} seconds")
-        
+
     except Exception as e:
         logger.error(f"An error occurred during prediction: {str(e)}")
-        raise
+        import traceback
+        logger.error(traceback.format_exc())
 
 if __name__ == "__main__":
     main()
