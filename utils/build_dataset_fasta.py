@@ -16,7 +16,7 @@ def process_chem(inpute_SMILES_path):
         SMILES
     """
     try:
-        with open(input_smiles_path, "r") as f:
+        with open(inpute_SMILES_path, "r") as f:
             for line in f:
                 line = line.strip()
                 # Check for both English and Chinese colons
@@ -32,13 +32,13 @@ def process_chem(inpute_SMILES_path):
                         return smiles_string
             # If loop finishes without finding the SMILES line
             print(
-                f"Error: SMILES string not found in file {input_smiles_path}",
+                f"Error: SMILES string not found in file {inpute_SMILES_path}",
                 file=sys.stderr,
             )
             return None
     except FileNotFoundError:
         print(
-            f"Error: Input SMILES file not found at {input_smiles_path}",
+            f"Error: Input SMILES file not found at {inpute_SMILES_path}",
             file=sys.stderr,
         )
         return None
@@ -163,7 +163,7 @@ def main():
     if not os.path.exists(args.input_fasta):
         print(f"Error: Input file '{args.input_fasta}' not found.", file=sys.stderr)
         sys.exit(1)
-    chem_SIMILES = process_chem(args.chem_SMILES)
+    chem_SMILES = process_chem(args.chem_SMILES)
     if not chem_SMILES:
         print(f"Error: Failed to process SMILES from '{args.chem_SMILES}'", file=sys.stderr)
         sys.exit(1)
