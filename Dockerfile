@@ -2,8 +2,8 @@ FROM pytorch/pytorch:2.3.1-cuda11.8-cudnn8-runtime
 
 WORKDIR /app
 
-ENV DEBIAN_FRONTEND=noninteractive
-
+ARG DEBIAN_FRONTEND=noninteractive
+ENV DGLBACKEND=pytorch
 # Copy requirements.txt to take advantage of Docker cache
 COPY requirements.txt .
 RUN conda create -n graphban python=3.11 \
@@ -28,3 +28,6 @@ EXPOSE 8889
 
 # Set entrypoint to run JupyterLab
 ENTRYPOINT ["/opt/conda/envs/graphban/bin/jupyter", "lab", "--ip='0.0.0.0'", "--port=8889", "--no-browser", "--allow-root", "--NotebookApp.token=''", "--NotebookApp.password=''"]
+
+HEALTHCHECK --interval=10m --timeout=30s --start-period=10s --retries=3 \
+    CMD [ "curl -f http://localhost:8889 || exit 1" ]
