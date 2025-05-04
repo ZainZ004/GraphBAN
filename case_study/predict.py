@@ -235,7 +235,7 @@ def process_model_weights(model_path, base_model_state, config, device, test_loa
                     m = nn.Sigmoid()
                     n = torch.squeeze(m(score), 1)
                 else:
-                    n = score
+                    n = F.softmax(score, dim=1)[:, 1]
 
                 predictions.extend(n.cpu().tolist())
 
@@ -374,7 +374,7 @@ def main():
              return
 
         # 使用 ThreadPoolExecutor 并行处理模型
-        num_parallel_models = min(len(pth_files), 4)
+        num_parallel_models = min(len(pth_files), 2)
         logger.info(f"Starting parallel inference with max_workers={num_parallel_models}")
         
         all_predictions = {}
