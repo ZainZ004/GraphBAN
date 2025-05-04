@@ -5,6 +5,9 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Setting up env variables to avoid warnings
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
 import esm
 import numpy as np
 import pandas as pd
@@ -87,7 +90,7 @@ def get_protein_feature(p_list, batch_converter, esm_model, device):
         dictionary = {}
         
         # 批量处理以提高效率
-        for i in range((len(data_tmp) + 4) // 5):
+        for i in tqdm(range((len(data_tmp) + 4) // 5), desc="Processing protein features"):
             data_part = data_tmp[i * 5 : (i + 1) * 5]
             if not data_part:  # 检查data_part是否为空
                 continue
@@ -342,7 +345,7 @@ def main():
         
         # 提取SMILES特征
         logger.info("Extracting SMILES features")
-        df_test_unique = df_test.drop_duplicates(subset="SMILES")
+        df_test_unique = df_test.drop_duplicates(subset="SMILES").copy()
         emb_list_test = get_embeddings(df_test_unique, tokenizer, model_chem, device)
         df_test_unique["fcfp"] = emb_list_test
         df_test = pd.merge(df_test, df_test_unique[["SMILES", "fcfp"]], on="SMILES", how="left")
