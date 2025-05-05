@@ -6,31 +6,33 @@ import requests  # Added for UniProt API
 import sqlite3  # Added for SQLite
 import time  # Added for potential API rate limiting
 import concurrent.futures  # Added for parallel processing
-import math  # Added for mathematical calculations
 import logging  # Added logging module
 import traceback
+
 
 # Configure logger
 def setup_logger(log_level=logging.INFO):
     """Configure and return a logger object"""
-    logger = logging.getLogger('protein_processor')
+    logger = logging.getLogger("protein_processor")
     logger.setLevel(log_level)
-    
+
     # Avoid adding duplicate handlers if logger already has them
     if not logger.handlers:
         # Create console handler
         console_handler = logging.StreamHandler()
         console_handler.setLevel(log_level)
-        
+
         # Set log format
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s',
-                                     datefmt='%Y-%m-%d %H:%M:%S')
+        formatter = logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        )
         console_handler.setFormatter(formatter)
-        
+
         # Add handler to logger
         logger.addHandler(console_handler)
-    
+
     return logger
+
 
 # --- Mapping Functions ---
 
@@ -44,21 +46,24 @@ def get_uniprot_name(sequence, retries=3, delay=1, logger=None):
         "query": f'sequence:"{sequence}"',  # Search by exact sequence
         "fields": "protein_name",
         "format": "tsv",
-        "size": 1  # Expecting one primary match
+        "size": 1,  # Expecting one primary match
     }
     for attempt in range(retries):
         try:
             # Consider adjusting timeout for potentially slower responses under load
             response = requests.get(base_url, params=params, timeout=15)
             response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
-            lines = response.text.strip().split('\n')
-            if len(lines) > 1 and lines[1]:  # Check if we got a result line after the header
+            lines = response.text.strip().split("\n")
+            if (
+                len(lines) > 1 and lines[1]
+            ):  # Check if we got a result line after the header
                 # Assuming the name is the first column after the header
-                return lines[1].split('\t')[0]  # Extract the protein name
+                return lines[1].split("\t")[0]  # Extract the protein name
             else:
                 return sequence  # Return original sequence if not found
         except requests.exceptions.RequestException as e:
             # Reduce verbosity of warnings during parallel execution
+            logger.error(f"UniProt API Error: {e}")
             if attempt < retries - 1:
                 time.sleep(delay * (attempt + 1))  # Exponential backoff
     return sequence  # Fallback if all retries fail
@@ -77,22 +82,28 @@ def get_name_from_sqlite(sequence, db_path=None, db_cursor=None):
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            cursor.execute("SELECT name FROM protein_map WHERE sequence = ?", (sequence,))
+            cursor.execute(
+                "SELECT name FROM protein_map WHERE sequence = ?", (sequence,)
+            )
             result = cursor.fetchone()
             return_val = result[0] if result else sequence
             conn.close()
             return return_val
         except sqlite3.Error as e:
+            logger.error(f"SQLite Error: {e}")
             if conn:
                 conn.close()
             return sequence  # Return original sequence on DB error
     # If a cursor is provided, use the existing connection (suitable for serial processing)
     elif db_cursor:
         try:
-            db_cursor.execute("SELECT name FROM protein_map WHERE sequence = ?", (sequence,))
+            db_cursor.execute(
+                "SELECT name FROM protein_map WHERE sequence = ?", (sequence,)
+            )
             result = db_cursor.fetchone()
             return result[0] if result else sequence
         except sqlite3.Error as e:
+            logger.error(f"SQLite Error: {e}")
             return sequence  # Return original sequence on DB error
     else:
         return sequence  # Return original if neither cursor nor path provided
@@ -103,34 +114,34 @@ def process_chunk(chunk_data):
     """
     Processes a single DataFrame chunk: applies protein name mapping.
     Designed for parallel processing, includes SQLite connection management.
-    
+
     Args:
         chunk_data: A tuple containing the chunk, mapping method, and mapping data
     """
     chunk, mapping_method, mapping_data_or_path = chunk_data
-    
-    if 'Protein' not in chunk.columns or 'predicted_value' not in chunk.columns:
+
+    if "Protein" not in chunk.columns or "predicted_value" not in chunk.columns:
         # Skip the chunk if required columns are missing
         return None
-    
+
     # Internal function to apply mapping based on the method
     def apply_mapping(sequence):
-        if mapping_method == 'uniprot':
+        if mapping_method == "uniprot":
             # UniProt API mapping
             return get_uniprot_name(sequence)
-        elif mapping_method == 'csv':
+        elif mapping_method == "csv":
             # CSV dictionary mapping
             return get_name_from_csv(sequence, mapping_data_or_path)
-        elif mapping_method == 'sqlite':
+        elif mapping_method == "sqlite":
             # SQLite database mapping, create a connection for each process
             return get_name_from_sqlite(sequence, db_path=mapping_data_or_path)
         else:
             return sequence  # Fallback for unknown methods
-    
+
     # Apply the mapping function to the 'Protein' column
     # Note: progress_apply may not work well across processes
     # We rely on the overall progress bar to track chunks
-    chunk['Protein'] = chunk['Protein'].apply(apply_mapping)
+    chunk["Protein"] = chunk["Protein"].apply(apply_mapping)
     return chunk
 
 
@@ -156,7 +167,13 @@ def get_protein_name(sequence, method, mapping_data):
 
 # Modified process_csv for parallel processing
 def process_csv(
-    input_path, output_path, mapping_method, mapping_data_or_path, chunk_size=10000, max_workers=None, log_level=logging.INFO
+    input_path,
+    output_path,
+    mapping_method,
+    mapping_data_or_path,
+    chunk_size=10000,
+    max_workers=None,
+    log_level=logging.INFO,
 ):
     """
     Reads a CSV in chunks, processes chunks in parallel to replace 'Protein' column sequences with protein names,
@@ -173,7 +190,7 @@ def process_csv(
     """
     # Configure logger
     logger = setup_logger(log_level)
-    
+
     # Set maximum number of worker processes
     if max_workers is None:
         max_workers = os.cpu_count()
@@ -184,18 +201,23 @@ def process_csv(
             logger.error(f"Input file not found: {input_path}")
             raise FileNotFoundError(f"Input file not found: {input_path}")
 
-        total_size = os.path.getsize(input_path)
-        logger.info(f"Processing {input_path} using '{mapping_method}' mapping method with up to {max_workers} workers...")
-        
+        logger.info(
+            f"Processing {input_path} using '{mapping_method}' mapping method with up to {max_workers} workers..."
+        )
+
         # Warn about potential rate limits for UniProt API
-        if mapping_method == 'uniprot':
-            logger.warning("Using UniProt API in parallel processing may lead to rate limiting.")
+        if mapping_method == "uniprot":
+            logger.warning(
+                "Using UniProt API in parallel processing may lead to rate limiting."
+            )
 
         processed_chunks = []
         futures = []
 
         # Use ProcessPoolExecutor for parallel processing
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=max_workers
+        ) as executor:
             # Read chunks and submit them for processing
             chunk_iterator = pd.read_csv(input_path, chunksize=chunk_size)
             logger.info("Submitting chunks for parallel processing...")
@@ -209,14 +231,20 @@ def process_csv(
                 futures.append(executor.submit(process_chunk, chunk_data_package))
 
             if submitted_chunks == 0:
-                logger.warning("Input CSV file appears to be empty or contains only a header.")
+                logger.warning(
+                    "Input CSV file appears to be empty or contains only a header."
+                )
                 pd.DataFrame().to_csv(output_path, index=False)
                 logger.info(f"Saved empty processed file to {output_path}")
                 return
 
             logger.info(f"Submitted {submitted_chunks} chunks. Waiting for results...")
             # Process results with tqdm progress bar
-            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing chunks"):
+            for future in tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(futures),
+                desc="Processing chunks",
+            ):
                 try:
                     processed_chunk = future.result()
                     if processed_chunk is not None:
@@ -299,16 +327,18 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    
+
     # Convert string log level to logging constant
     log_level = getattr(logging, args.log_level)
-    
+
     # Configure logger
     logger = setup_logger(log_level)
 
     # Validate mapping file requirement
     if args.mapping_method in ["csv", "sqlite"] and not args.mapping_file:
-        logger.error("--mapping-file is required when --mapping-method is 'csv' or 'sqlite'.")
+        logger.error(
+            "--mapping-file is required when --mapping-method is 'csv' or 'sqlite'."
+        )
         parser.error(
             "--mapping-file is required when --mapping-method is 'csv' or 'sqlite'."
         )
@@ -335,7 +365,9 @@ if __name__ == "__main__":
             mapping_data_or_path = pd.Series(
                 map_df.name.values, index=map_df.sequence
             ).to_dict()
-            logger.info(f"CSV mapping loaded into dictionary ({len(mapping_data_or_path)} entries).")
+            logger.info(
+                f"CSV mapping loaded into dictionary ({len(mapping_data_or_path)} entries)."
+            )
             # Clear large DataFrame if memory is tight
             del map_df
 
@@ -356,7 +388,9 @@ if __name__ == "__main__":
                 raise sqlite3.OperationalError(msg)
 
         elif args.mapping_method == "uniprot":
-            logger.info("Using UniProt API for mapping. This may be slow for large datasets.")
+            logger.info(
+                "Using UniProt API for mapping. This may be slow for large datasets."
+            )
             mapping_data_or_path = None  # No pre-loading needed
 
         # --- Run processing ---
