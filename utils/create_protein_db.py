@@ -108,6 +108,95 @@ def create_db(db_path, logger, overwrite=False):
         raise
 
 
+def validate_db(db_path, logger):
+    """
+    验证数据库内容，检查序列是否都有对应的蛋白名称，并打印统计信息。
+
+    Args:
+        db_path (str): 数据库文件路径。
+        logger (logging.Logger): 日志记录器。
+    
+    Returns:
+        bool: 验证是否通过。
+    """
+    try:
+        logger.info(f"正在验证数据库：{db_path}")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # 获取总记录数
+        cursor.execute("SELECT COUNT(*) FROM protein_map")
+        total_records = cursor.fetchone()[0]
+        
+        # 检查缺失蛋白名称的记录
+        cursor.execute("SELECT COUNT(*) FROM protein_map WHERE name IS NULL OR trim(name) = ''")
+        missing_name_count = cursor.fetchone()[0]
+        
+        # 检查缺失序列的记录
+        cursor.execute("SELECT COUNT(*) FROM protein_map WHERE sequence IS NULL OR trim(sequence) = ''")
+        missing_seq_count = cursor.fetchone()[0]
+        
+        # 检查缺失ID的记录
+        cursor.execute("SELECT COUNT(*) FROM protein_map WHERE id IS NULL OR trim(id) = ''")
+        missing_id_count = cursor.fetchone()[0]
+        
+        # 打印统计信息
+        logger.info("数据库验证结果:")
+        logger.info(f"  - 总记录数: {total_records}")
+        logger.info(f"  - 缺失蛋白名称的记录: {missing_name_count} ({(missing_name_count/total_records*100):.2f}% 如果有)")
+        logger.info(f"  - 缺失序列的记录: {missing_seq_count} ({(missing_seq_count/total_records*100):.2f}% 如果有)")
+        logger.info(f"  - 缺失ID的记录: {missing_id_count} ({(missing_id_count/total_records*100):.2f}% 如果有)")
+        
+        # 如果有问题记录，获取一些示例
+        if missing_name_count > 0:
+            cursor.execute("SELECT id, sequence FROM protein_map WHERE name IS NULL OR trim(name) = '' LIMIT 5")
+            examples = cursor.fetchall()
+            logger.warning("缺失蛋白名称的记录示例:")
+            for idx, (prot_id, seq) in enumerate(examples, 1):
+                logger.warning(f"  {idx}. ID: {prot_id}, 序列前缀: {seq[:20]}...")
+        
+        conn.close()
+        
+        # 判断验证是否通过
+        validation_passed = (missing_seq_count == 0)  # 序列是必须的
+        status = "通过" if validation_passed else "未通过"
+        logger.info(f"数据库验证{status}")
+        
+        return validation_passed
+        
+    except sqlite3.Error as e:
+        logger.error(f"验证数据库时发生错误: {e}")
+        return False
+
+
+def fix_missing_names(db_path, logger):
+    """
+    修复数据库中缺失蛋白名称的记录，使用ID作为名称。
+    
+    Args:
+        db_path (str): 数据库文件路径。
+        logger (logging.Logger): 日志记录器。
+        
+    Returns:
+        int: 修复的记录数量。
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # 查找缺失蛋白名称的记录并修复
+        cursor.execute("UPDATE protein_map SET name = id WHERE name IS NULL OR trim(name) = ''")
+        fixed_count = cursor.rowcount
+        conn.commit()
+        
+        logger.info(f"已修复 {fixed_count} 条缺失蛋白名称的记录")
+        conn.close()
+        return fixed_count
+    except sqlite3.Error as e:
+        logger.error(f"修复缺失蛋白名称时发生错误: {e}")
+        return 0
+
+
 def load_fasta_to_db(fasta_path, db_conn, batch_size=1000, logger=None):
     """
     Loads protein sequences from a FASTA file into the database.
@@ -242,6 +331,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1000, help="Batch size for database insertion")
     parser.add_argument("--log_level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO", help="Logging level")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing database")
+    parser.add_argument("--validate", action="store_true", help="Validate database after creation")
+    parser.add_argument("--auto_fix", action="store_true", help="Automatically fix issues found during validation")
     
     args = parser.parse_args()
     
@@ -271,6 +362,27 @@ def main():
             
         # 关闭数据库连接
         db_conn.close()
+        
+        # 验证数据库
+        if args.validate or logger.level <= logging.INFO:  # 如果显式要求验证或日志级别是INFO及以下
+            validation_passed = validate_db(args.db_path, logger)
+            if not validation_passed:
+                logger.warning("数据库验证未通过，可能存在缺失或无效的数据")
+                
+                # 自动修复问题
+                if args.auto_fix:
+                    logger.info("正在尝试自动修复问题...")
+                    fixed_count = fix_missing_names(args.db_path, logger)
+                    if fixed_count > 0:
+                        logger.info(f"修复了 {fixed_count} 条缺失蛋白名称的记录")
+                        # 重新验证以确认修复效果
+                        if validate_db(args.db_path, logger):
+                            logger.info("修复成功，数据库验证现在通过")
+                        else:
+                            logger.warning("修复后仍有问题存在")
+                else:
+                    logger.info("使用 --auto_fix 参数可以尝试自动修复这些问题")
+        
         if os.path.exists(args.db_path):
             logger.info(f"Database updated successfully: {args.db_path}")
         else:
