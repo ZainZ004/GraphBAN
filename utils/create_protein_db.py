@@ -97,36 +97,36 @@ def load_fasta_to_db(fasta_path, db_conn, batch_size=1000, logger=None):
     
     try:
         logger.info(f"From {fasta_path} loding protein Sequences...")
-        
-        # 使用SeqIO解析FASTA文件
-        for record in tqdm(SeqIO.parse(fasta_path, "fasta"), desc="Handling FASTA Records"):
-            seq_id = record.id
-            sequence = str(record.seq)
-            description = record.description
-            name = description.split(" ")[0] if " " in description else seq_id
-            
-            # 添加到批处理列表
-            batch.append((seq_id, sequence, name, description))
-            counter += 1
-            
-            # 批量提交到数据库
-            if len(batch) >= batch_size:
+        with open(fasta_path, "r") as fasta_file:
+            # 使用SeqIO解析FASTA文件
+            for record in tqdm(SeqIO.parse(fasta_file, "fasta"), desc="Handling FASTA Records"):
+                seq_id = record.id
+                sequence = str(record.seq)
+                description = record.description
+                name = description.split(" ")[0] if " " in description else seq_id
+                
+                # 添加到批处理列表
+                batch.append((seq_id, sequence, name, description))
+                counter += 1
+                
+                # 批量提交到数据库
+                if len(batch) >= batch_size:
+                    cursor.executemany(
+                        "INSERT OR IGNORE INTO protein_map (id, sequence, name, description) VALUES (?, ?, ?, ?)",
+                        batch
+                    )
+                    db_conn.commit()
+                    batch = []
+                    
+            # 提交最后一批
+            if batch:
                 cursor.executemany(
                     "INSERT OR IGNORE INTO protein_map (id, sequence, name, description) VALUES (?, ?, ?, ?)",
                     batch
                 )
                 db_conn.commit()
-                batch = []
                 
-        # 提交最后一批
-        if batch:
-            cursor.executemany(
-                "INSERT OR IGNORE INTO protein_map (id, sequence, name, description) VALUES (?, ?, ?, ?)",
-                batch
-            )
-            db_conn.commit()
-            
-        logger.info(f"Successfully load {counter} records of protein to DB")
+            logger.info(f"Successfully load {counter} records of protein to DB")
         
     except Exception as e:
         logger.error(f"An error occured when processing FASTA file: {e}")
