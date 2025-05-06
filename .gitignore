@@ -1,1 +1,8 @@
 __pycache__
+.conda
+.venv
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite

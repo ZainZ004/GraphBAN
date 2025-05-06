@@ -35,46 +35,76 @@ def setup_logger(log_level=logging.INFO):
     return logger
 
 
-def create_db(db_path, logger):
+def create_db(db_path, logger, overwrite=False):
     """
-    Creates a new SQLite database and a protein_map table.
+    Creates a new SQLite database and a protein_map table, or connects to an existing one.
 
     Args:
         db_path (str): Path to the SQLite database file.
         logger (logging.Logger): Logger object for logging messages.
+        overwrite (bool, optional): Whether to overwrite an existing database (default: False).
 
     Returns:
         sqlite3.Connection: A connection to the SQLite database.
     """
     try:
-        # 如果文件已存在，先删除它
-        if os.path.exists(db_path):
-            os.remove(db_path)
-            logger.info(f"Deleted existing DB: {db_path}")
+        db_exists = os.path.exists(db_path)
         
-        # 创建一个新的数据库连接
+        if db_exists:
+            if overwrite:
+                os.remove(db_path)
+                logger.info(f"Deleted existing DB: {db_path}")
+                db_exists = False
+            else:
+                logger.info(f"Using existing DB: {db_path}")
+        
+        # 创建一个新的数据库连接或连接到现有数据库
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # 创建protein_map表
-        cursor.execute('''
-        CREATE TABLE protein_map (
-            id TEXT,
-            sequence TEXT PRIMARY KEY,
-            name TEXT,
-            description TEXT
-        )
-        ''')
-        
-        # 创建索引以加快查询速度
-        cursor.execute('CREATE INDEX idx_sequence ON protein_map(sequence)')
-        cursor.execute('CREATE INDEX idx_id ON protein_map(id)')
-        
-        conn.commit()
-        logger.info(f"Successfully create DB: {db_path}")
+        # 如果数据库是新创建的或被覆盖了，则创建表和索引
+        if not db_exists:
+            # 创建protein_map表
+            cursor.execute('''
+            CREATE TABLE protein_map (
+                id TEXT,
+                sequence TEXT PRIMARY KEY,
+                name TEXT,
+                description TEXT
+            )
+            ''')
+            
+            # 创建索引以加快查询速度
+            cursor.execute('CREATE INDEX idx_sequence ON protein_map(sequence)')
+            cursor.execute('CREATE INDEX idx_id ON protein_map(id)')
+            
+            conn.commit()
+            logger.info(f"Successfully create DB: {db_path}")
+        else:
+            # 检查表是否存在
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='protein_map'")
+            if not cursor.fetchone():
+                # 如果表不存在，则创建表和索引
+                cursor.execute('''
+                CREATE TABLE protein_map (
+                    id TEXT,
+                    sequence TEXT PRIMARY KEY,
+                    name TEXT,
+                    description TEXT
+                )
+                ''')
+                
+                cursor.execute('CREATE INDEX idx_sequence ON protein_map(sequence)')
+                cursor.execute('CREATE INDEX idx_id ON protein_map(id)')
+                
+                conn.commit()
+                logger.info(f"Created missing table in existing DB: {db_path}")
+            else:
+                logger.info(f"Using existing table in DB: {db_path}")
+                
         return conn
     except sqlite3.Error as e:
-        logger.error(f"An error occured when creating DB: {e}")
+        logger.error(f"An error occured when creating/connecting to DB: {e}")
         raise
 
 
@@ -211,6 +241,7 @@ def main():
     # 通用选项
     parser.add_argument("--batch_size", type=int, default=1000, help="Batch size for database insertion")
     parser.add_argument("--log_level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO", help="Logging level")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing database")
     
     args = parser.parse_args()
     
@@ -219,8 +250,8 @@ def main():
     logger = setup_logger(log_level)
     
     try:
-        # 创建数据库和表
-        db_conn = create_db(args.db_path, logger)
+        # 创建数据库和表或连接到现有数据库
+        db_conn = create_db(args.db_path, logger, args.overwrite)
         
         # 根据输入类型加载数据
         if args.fasta:
@@ -240,7 +271,10 @@ def main():
             
         # 关闭数据库连接
         db_conn.close()
-        logger.info(f"Database created successfully: {args.db_path}")
+        if os.path.exists(args.db_path):
+            logger.info(f"Database updated successfully: {args.db_path}")
+        else:
+            logger.info(f"Database created successfully: {args.db_path}")
         
     except Exception as e:
         logger.error(f"An error occured in unknown position: {e}")

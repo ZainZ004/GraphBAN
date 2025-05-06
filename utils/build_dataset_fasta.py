@@ -1,10 +1,11 @@
 import argparse
-from Bio import SeqIO
-import sys
+import logging
 import os
 import sqlite3
+import sys
+
+from Bio import SeqIO
 from tqdm import tqdm
-import logging
 
 
 def setup_logger(log_level=logging.INFO):
@@ -32,6 +33,49 @@ def setup_logger(log_level=logging.INFO):
         logger.addHandler(console_handler)
 
     return logger
+
+
+def init_db(db_path, logger=None):
+    """
+    Initializes a SQLite database for storing protein sequences and IDs.
+
+    Args:
+        db_path (str): Path to the SQLite database file.
+        logger (logging.Logger, optional): Logger object for logging messages.
+
+    Returns:
+        sqlite3.Connection: A connection to the SQLite database.
+    """
+    try:
+        # Create directory if it doesn't exist
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir)
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Create protein_map table if it doesn't exist
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS protein_map (
+            id TEXT,
+            sequence TEXT PRIMARY KEY,
+            name TEXT,
+            description TEXT
+        )
+        """)
+
+        # Create indexes if they don't exist
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sequence ON protein_map(sequence)"
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_id ON protein_map(id)")
+
+        conn.commit()
+        return conn
+    except sqlite3.Error as e:
+        logger.error(f"Error initializing database: {e}", file=sys.stderr)
+        return None
 
 
 def process_chem(inpute_SMILES_path, logger=None):
@@ -106,49 +150,6 @@ def process_fasta_record(record, logger=None):
         return seq_id, sequence, description
     except Exception as e:
         logger.error(f"Error processing record {record.id}: {e}", file=sys.stderr)
-        return None
-
-
-def init_db(db_path, logger=None):
-    """
-    Initializes a SQLite database for storing protein sequences and IDs.
-
-    Args:
-        db_path (str): Path to the SQLite database file.
-        logger (logging.Logger, optional): Logger object for logging messages.
-
-    Returns:
-        sqlite3.Connection: A connection to the SQLite database.
-    """
-    try:
-        # Create directory if it doesn't exist
-        db_dir = os.path.dirname(db_path)
-        if db_dir and not os.path.exists(db_dir):
-            os.makedirs(db_dir)
-
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # Create protein_map table if it doesn't exist
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS protein_map (
-            id TEXT,
-            sequence TEXT PRIMARY KEY,
-            name TEXT,
-            description TEXT
-        )
-        """)
-
-        # Create indexes if they don't exist
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sequence ON protein_map(sequence)"
-        )
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_id ON protein_map(id)")
-
-        conn.commit()
-        return conn
-    except sqlite3.Error as e:
-        logger.error(f"Error initializing database: {e}", file=sys.stderr)
         return None
 
 
