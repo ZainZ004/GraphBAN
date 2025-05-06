@@ -13,7 +13,7 @@ import traceback
 # Configure logger
 def setup_logger(log_level=logging.INFO):
     """Configure and return a logger object"""
-    logger = logging.getLogger("protein_processor")
+    logger = logging.getLogger("Post_Data_Processor")
     logger.setLevel(log_level)
 
     # Avoid adding duplicate handlers if logger already has them
