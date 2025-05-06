@@ -2,6 +2,8 @@ import argparse
 from Bio import SeqIO
 import sys
 import os
+import sqlite3
+from tqdm import tqdm
 
 
 def process_chem(inpute_SMILES_path):
@@ -66,32 +68,90 @@ def process_fasta_record(record):
     try:
         seq_id = record.id
         sequence = str(record.seq)
+        description = record.description
         # Placeholder for future logic:
         # - Determine if it's a chemical or protein based on ID, sequence, description etc.
         # - Convert to the target data format.
         # For now, just return ID and sequence.
-        return seq_id, sequence
+        return seq_id, sequence, description
     except Exception as e:
         print(f"Error processing record {record.id}: {e}", file=sys.stderr)
         return None
 
 
-def process_large_fasta(input_fasta_path, chem_SMILES, output_file_path=None):
+def init_db(db_path):
+    """
+    Initializes a SQLite database for storing protein sequences and IDs.
+    
+    Args:
+        db_path (str): Path to the SQLite database file.
+        
+    Returns:
+        sqlite3.Connection: A connection to the SQLite database.
+    """
+    try:
+        # Create directory if it doesn't exist
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir)
+            
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Create protein_map table if it doesn't exist
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS protein_map (
+            id TEXT,
+            sequence TEXT PRIMARY KEY,
+            name TEXT,
+            description TEXT
+        )
+        ''')
+        
+        # Create indexes if they don't exist
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sequence ON protein_map(sequence)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_id ON protein_map(id)')
+        
+        conn.commit()
+        return conn
+    except sqlite3.Error as e:
+        print(f"Error initializing database: {e}", file=sys.stderr)
+        return None
+
+
+def process_large_fasta(input_fasta_path, chem_SMILES, output_file_path=None, db_path=None):
     """
     Reads a potentially large FASTA file record by record, processes each record,
     and writes the output incrementally.
 
     Args:
         input_fasta_path (str): Path to the input FASTA file.
+        chem_SMILES (str): SMILES string to be paired with each sequence.
         output_file_path (str, optional): Path to the output file.
                                           If None, prints to stdout. Defaults to None.
+        db_path (str, optional): Path to SQLite database for storing protein sequences.
+                                 If None, no database is used. Defaults to None.
     """
     output_handle = None
     input_handle = None  # Initialize input_handle
     pbar = None  # Initialize pbar
+    db_conn = None
+    db_cursor = None
+    batch = []
+    batch_size = 1000  # Number of records to process before committing to database
+    
     try:
         # Get total file size for progress bar
         total_size = os.path.getsize(input_fasta_path)
+
+        # Initialize database if path is provided
+        if db_path:
+            db_conn = init_db(db_path)
+            if db_conn:
+                db_cursor = db_conn.cursor()
+                print(f"Database initialized at {db_path}", file=sys.stderr)
+            else:
+                print(f"Warning: Failed to initialize database at {db_path}", file=sys.stderr)
 
         # Open the input file
         input_handle = open(input_fasta_path, "r")
@@ -107,16 +167,41 @@ def process_large_fasta(input_fasta_path, chem_SMILES, output_file_path=None):
             output_handle = sys.stdout
 
         processed_count = 0
-        for record in fasta_iterator:
+        for record in tqdm(fasta_iterator, desc="Processing FASTA records"):
             processed_data = process_fasta_record(record)
             if processed_data:
-                seq_id, sequence = processed_data
+                seq_id, sequence, description = processed_data
                 # Write processed data incrementally
                 output_handle.write(f"{chem_SMILES},{sequence}\n")
                 processed_count += 1
+                
+                # Store in database if enabled
+                if db_cursor:
+                    name = description.split(" ")[0] if " " in description else seq_id
+                    batch.append((seq_id, sequence, name, description))
+                    
+                    # Commit batch to database
+                    if len(batch) >= batch_size:
+                        try:
+                            db_cursor.executemany(
+                                "INSERT OR IGNORE INTO protein_map (id, sequence, name, description) VALUES (?, ?, ?, ?)",
+                                batch
+                            )
+                            db_conn.commit()
+                            batch = []
+                        except sqlite3.Error as e:
+                            print(f"Database error during batch insert: {e}", file=sys.stderr)
 
-        # tqdm handles the final progress display, so the print statement below might be redundant for progress itself
-        # print(f"\nFinished processing. Total records processed: {processed_count}", file=sys.stderr) # Keep for record count summary
+        # Commit any remaining batch items to database
+        if db_cursor and batch:
+            try:
+                db_cursor.executemany(
+                    "INSERT OR IGNORE INTO protein_map (id, sequence, name, description) VALUES (?, ?, ?, ?)",
+                    batch
+                )
+                db_conn.commit()
+            except sqlite3.Error as e:
+                print(f"Database error during final batch insert: {e}", file=sys.stderr)
 
     except FileNotFoundError:
         print(
@@ -136,6 +221,13 @@ def process_large_fasta(input_fasta_path, chem_SMILES, output_file_path=None):
         if output_file_path and output_handle and output_handle is not sys.stdout:
             output_handle.close()
             print(f"Output written to {output_file_path}", file=sys.stderr)
+            
+        # Close database connection if it was opened
+        if db_conn:
+            db_conn.close()
+            if db_path and "processed_count" in locals():
+                print(f"Database updated with {processed_count} protein sequences", file=sys.stderr)
+            
         # Print final record count summary regardless of output destination
         if "processed_count" in locals():  # Check if processing started
             print(
@@ -156,6 +248,12 @@ def main():
         help="Path to the output file (optional). If not provided, output goes to standard output.",
         default=None,
     )
+    parser.add_argument(
+        "-d",
+        "--database",
+        help="Path to SQLite database for storing protein sequences (optional).",
+        default=None,
+    )
     # Add more arguments if needed for specifying chemical/protein types or output formats
 
     args = parser.parse_args()
@@ -167,7 +265,7 @@ def main():
     if not chem_SMILES:
         print(f"Error: Failed to process SMILES from '{args.chem_SMILES}'", file=sys.stderr)
         sys.exit(1)
-    process_large_fasta(args.input_fasta, chem_SMILES, args.output)
+    process_large_fasta(args.input_fasta, chem_SMILES, args.output, args.database)
 
 
 if __name__ == "__main__":
