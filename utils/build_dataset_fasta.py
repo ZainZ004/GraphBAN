@@ -74,7 +74,7 @@ def init_db(db_path, logger=None):
         conn.commit()
         return conn
     except sqlite3.Error as e:
-        logger.error(f"Error initializing database: {e}", file=sys.stderr)
+        logger.error(f"Error initializing database: {e}")
         return None
 
 
@@ -107,19 +107,17 @@ def process_chem(inpute_SMILES_path, logger=None):
                         return smiles_string
             # If loop finishes without finding the SMILES line
             logger.error(
-                f"Error: SMILES string not found in file {inpute_SMILES_path}",
-                file=sys.stderr,
+                f"Error: SMILES string not found in file {inpute_SMILES_path}"
             )
             return None
     except FileNotFoundError:
         logger.error(
-            f"Error: Input SMILES file not found at {inpute_SMILES_path}",
-            file=sys.stderr,
+            f"Error: Input SMILES file not found at {inpute_SMILES_path}"
         )
         return None
     except Exception as e:
         logger.error(
-            f"An error occurred while processing the SMILES file: {e}", file=sys.stderr
+            f"An error occurred while processing the SMILES file: {e}"
         )
         return None
 
@@ -149,7 +147,8 @@ def process_fasta_record(record, logger=None):
         # For now, just return ID and sequence.
         return seq_id, sequence, description
     except Exception as e:
-        logger.error(f"Error processing record {record.id}: {e}", file=sys.stderr)
+        if logger:
+            logger.error(f"Error processing record {record.id}: {e}")
         return None
 
 
@@ -183,12 +182,9 @@ def process_large_fasta(
             db_conn = init_db(db_path)
             if db_conn:
                 db_cursor = db_conn.cursor()
-                logger.info(f"Database initialized at {db_path}", file=sys.stderr)
+                logger.info(f"Database initialized at {db_path}")
             else:
-                logger.error(
-                    f"Warning: Failed to initialize database at {db_path}",
-                    file=sys.stderr,
-                )
+                logger.error(f"Warning: Failed to initialize database at {db_path}")
 
         #!todo Use with statement for file handling
         # Open the input file
@@ -228,10 +224,7 @@ def process_large_fasta(
                             db_conn.commit()
                             batch = []
                         except sqlite3.Error as e:
-                            logger.error(
-                                f"Database error during batch insert: {e}",
-                                file=sys.stderr,
-                            )
+                            logger.error(f"Database error during batch insert: {e}")
 
         # Commit any remaining batch items to database
         if db_cursor and batch:
@@ -242,14 +235,12 @@ def process_large_fasta(
                 )
                 db_conn.commit()
             except sqlite3.Error as e:
-                print(f"Database error during final batch insert: {e}", file=sys.stderr)
+                logger.error(f"Database error during final batch insert: {e}")
 
     except FileNotFoundError:
-        logger.error(
-            f"Error: Input FASTA file not found at {input_fasta_path}", file=sys.stderr
-        )
+        logger.error(f"Error: Input FASTA file not found at {input_fasta_path}")
     except Exception as e:
-        logger.error(f"An error occurred: {e}", file=sys.stderr)
+        logger.error(f"An error occurred: {e}")
     finally:
         # Close the tqdm progress bar (which also closes the input file handle)
         if pbar:
@@ -261,23 +252,75 @@ def process_large_fasta(
         # Close the output file handle if it was opened and is not stdout
         if output_file_path and output_handle and output_handle is not sys.stdout:
             output_handle.close()
-            logger.info(f"Output written to {output_file_path}", file=sys.stderr)
+            logger.info(f"Output written to {output_file_path}")
 
         # Close database connection if it was opened
         if db_conn:
             db_conn.close()
             if db_path and "processed_count" in locals():
-                logger.info(
-                    f"Database updated with {processed_count} protein sequences",
-                    file=sys.stderr,
-                )
+                logger.info(f"Database updated with {processed_count} protein sequences")
 
         # Print final record count summary regardless of output destination
         if "processed_count" in locals():  # Check if processing started
-            logger.info(
-                f"\nFinished processing. Total records processed: {processed_count}",
-                file=sys.stderr,
-            )
+            logger.info(f"\nFinished processing. Total records processed: {processed_count}")
+
+
+def create_name_sequence_mapping(input_fasta_path, output_file_path, logger=None):
+    """
+    Creates a CSV mapping file with 'name' and 'sequence' columns from a FASTA file.
+    This mapping file can be used by post_data_process.py for protein name lookup.
+
+    Args:
+        input_fasta_path (str): Path to the input FASTA file.
+        output_file_path (str): Path to the output CSV file.
+        logger (logging.Logger, optional): Logger object for logging messages.
+    """
+    if logger is None:
+        logger = setup_logger()
+    
+    input_handle = None
+    output_handle = None
+    processed_count = 0
+    
+    try:
+        # Open the input file
+        input_handle = open(input_fasta_path, "r")
+        
+        # Use SeqIO.parse with tqdm for progress tracking
+        fasta_iterator = SeqIO.parse(input_handle, "fasta")
+        
+        # Open output file and write header
+        output_handle = open(output_file_path, "w")
+        output_handle.write("sequence,name\n")  # Header as required by post_data_process.py
+        
+        logger.info(f"Creating name-sequence mapping from {input_fasta_path}...")
+        
+        for record in tqdm(fasta_iterator, desc="Processing FASTA records"):
+            processed_data = process_fasta_record(record, logger)
+            if processed_data:
+                seq_id, sequence, description = processed_data
+                # Extract name from description or use ID if description is minimal
+                name = description.split(" ")[0] if " " in description else seq_id
+                
+                # Write mapping entry: sequence,name
+                output_handle.write(f"{sequence},{name}\n")
+                processed_count += 1
+                
+    except FileNotFoundError:
+        logger.error(f"Error: Input FASTA file not found at {input_fasta_path}")
+    except Exception as e:
+        logger.error(f"An error occurred: {e}")
+    finally:
+        # Clean up resources
+        if input_handle:
+            input_handle.close()
+        
+        if output_handle:
+            output_handle.close()
+            logger.info(f"Output mapping written to {output_file_path}")
+        
+        if processed_count > 0:
+            logger.info(f"\nFinished processing. Total records processed: {processed_count}")
 
 
 def main():
@@ -285,7 +328,13 @@ def main():
         description="Process large FASTA files efficiently, converting sequences to a target format."
     )
     parser.add_argument("input_fasta", help="Path to the input FASTA file.")
-    parser.add_argument("chem_SMILES", help="input SMILES to be predicted.")
+    
+    # Create mutually exclusive group for different operation modes
+    mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument("--chem_SMILES", help="Input SMILES file to be predicted.", default=None)
+    mode_group.add_argument("--create_mapping", action="store_true", 
+                          help="Create a name-sequence mapping CSV file for use with post_data_process.py")
+    
     parser.add_argument(
         "-o",
         "--output",
@@ -305,14 +354,27 @@ def main():
     if not os.path.exists(args.input_fasta):
         print(f"Error: Input file '{args.input_fasta}' not found.", file=sys.stderr)
         sys.exit(1)
-    chem_SMILES = process_chem(args.chem_SMILES)
-    if not chem_SMILES:
-        print(
-            f"Error: Failed to process SMILES from '{args.chem_SMILES}'",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    process_large_fasta(args.input_fasta, chem_SMILES, args.output, args.database)
+        
+    # Setup logger
+    logger = setup_logger()
+    
+    # Determine which operation mode to run
+    if args.create_mapping:
+        # Run in mapping creation mode
+        if not args.output:
+            print("Error: Output file path is required when creating a mapping file.", file=sys.stderr)
+            sys.exit(1)
+        create_name_sequence_mapping(args.input_fasta, args.output, logger)
+    else:
+        # Run in normal SMILES prediction mode
+        chem_SMILES = process_chem(args.chem_SMILES, logger)
+        if not chem_SMILES:
+            print(
+                f"Error: Failed to process SMILES from '{args.chem_SMILES}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        process_large_fasta(args.input_fasta, chem_SMILES, args.output, args.database, logger)
 
 
 if __name__ == "__main__":

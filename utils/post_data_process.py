@@ -74,36 +74,83 @@ def get_name_from_csv(sequence, mapping_dict):
     return mapping_dict.get(sequence, sequence)
 
 
-def get_name_from_sqlite(sequence, db_path=None, db_cursor=None):
+def get_name_from_sqlite(sequence, db_path=None, db_cursor=None, logger=None):
     """Looks up protein name from a SQLite database."""
+    # Use default logger if not provided
+    if logger is None:
+        logger = logging.getLogger("Post_Data_Processor")
+    
     # If a database path is provided, create a new connection (suitable for parallel processing)
     if db_path and not db_cursor:
         conn = None
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
+            # Log the sequence being queried (for debugging)
+            logger.debug(f"Querying database for sequence: {sequence[:50]}...")
+            
+            # Check if the sequence exists in the database first
+            cursor.execute(
+                "SELECT COUNT(*) FROM protein_map WHERE sequence = ?", (sequence,)
+            )
+            count = cursor.fetchone()[0]
+            if count == 0:
+                logger.debug(f"Sequence not found in database: {sequence[:50]}...")
+                return sequence
+                
+            # If it exists, get the name
             cursor.execute(
                 "SELECT name FROM protein_map WHERE sequence = ?", (sequence,)
             )
             result = cursor.fetchone()
             return_val = result[0] if result else sequence
+            
+            # Log the result (for debugging)
+            if result:
+                logger.debug(f"Found name for sequence: {return_val}")
+            else:
+                logger.debug(f"No name found for sequence: {sequence[:50]}...")
+                
             conn.close()
             return return_val
         except sqlite3.Error as e:
             logger.error(f"SQLite Error: {e}")
+            logger.error(f"Failed query for sequence: {sequence[:50]}...")
             if conn:
                 conn.close()
             return sequence  # Return original sequence on DB error
     # If a cursor is provided, use the existing connection (suitable for serial processing)
     elif db_cursor:
         try:
+            # Log the sequence being queried (for debugging)
+            logger.debug(f"Querying database using existing cursor for sequence: {sequence[:50]}...")
+            
+            # Check if the sequence exists in the database first
+            db_cursor.execute(
+                "SELECT COUNT(*) FROM protein_map WHERE sequence = ?", (sequence,)
+            )
+            count = db_cursor.fetchone()[0]
+            if count == 0:
+                logger.debug(f"Sequence not found in database: {sequence[:50]}...")
+                return sequence
+                
+            # If it exists, get the name
             db_cursor.execute(
                 "SELECT name FROM protein_map WHERE sequence = ?", (sequence,)
             )
             result = db_cursor.fetchone()
-            return result[0] if result else sequence
+            return_val = result[0] if result else sequence
+            
+            # Log the result (for debugging)
+            if result:
+                logger.debug(f"Found name for sequence: {return_val}")
+            else:
+                logger.debug(f"No name found for sequence: {sequence[:50]}...")
+                
+            return return_val
         except sqlite3.Error as e:
             logger.error(f"SQLite Error: {e}")
+            logger.error(f"Failed query for sequence: {sequence[:50]}...")
             return sequence  # Return original sequence on DB error
     else:
         return sequence  # Return original if neither cursor nor path provided
